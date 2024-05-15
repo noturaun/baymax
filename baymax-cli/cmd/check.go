@@ -18,12 +18,13 @@ var (
 	path     string
 	format   string
 	checkUrl string
+	proxy    bool
 	checkCmd = &cobra.Command{
 		Use:   "check",
 		Short: "Check dependency vulnerability status",
 		Run: func(cmd *cobra.Command, args []string) {
 			buff, f := Check(path)
-			res := http.Check(buff, f)
+			res := http.Check(buff, f, path, proxy)
 			Render(res)
 		},
 	}
@@ -34,6 +35,7 @@ var (
 
 func init() {
 	checkCmd.Flags().StringVar(&path, "path", "", "Dependency path to check")
+	checkCmd.Flags().BoolVar(&proxy, "proxy", false, "Usage with proxy")
 }
 
 type model struct {
@@ -76,16 +78,14 @@ func Render(result http.Request) {
 	var rows []table.Row
 	i := 1
 	for _, c := range result.Components {
-		if c.ComponentIdentifier.Detection == "block" {
-			rows = append(rows, []string{
-				strconv.Itoa(i),
-				c.ComponentIdentifier.Coordinates.GroupId,
-				c.ComponentIdentifier.Coordinates.ArtifactId,
-				c.ComponentIdentifier.Coordinates.Version,
-				c.ComponentIdentifier.Detection,
-			})
-			i++
-		}
+		rows = append(rows, []string{
+			strconv.Itoa(i),
+			c.ComponentIdentifier.Coordinates.GroupId,
+			c.ComponentIdentifier.Coordinates.ArtifactId,
+			c.ComponentIdentifier.Coordinates.Version,
+			c.ComponentIdentifier.Detection,
+		})
+		i++
 	}
 
 	t := table.New(
