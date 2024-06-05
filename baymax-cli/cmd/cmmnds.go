@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -44,6 +45,14 @@ func Check(target string) (*bytes.Buffer, string) {
 	checkPath()
 	checkDependencyFile()
 	return spawn()
+}
+
+type Dependency struct {
+	GroupID    string       `json:"groupId"`
+	ArtifactID string       `json:"artifactId"`
+	Version    string       `json:"version"`
+	Scope      string       `json:"scope,omitempty"`
+	Children   []Dependency `json:"children,omitempty"`
 }
 
 func pipeline(stdout *bytes.Buffer, cmds ...*exec.Cmd) (err error) {
@@ -123,7 +132,6 @@ func spawn() (*bytes.Buffer, string) {
 func checkPath() {
 	if path != "" {
 		if !strings.Contains(path, POM) && !strings.Contains(path, PACKAGE_JSON) {
-			fmt.Printf("Working on : %s\n", path)
 			format = checkDependencyFile()
 		} else {
 			if strings.Contains(path, PACKAGE_JSON) {
@@ -163,4 +171,103 @@ func checkDependencyFile() string {
 		}
 	}
 	return ""
+}
+
+func checkMvn() {
+	cmd := exec.Command("mvn", "dependency:tree")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+
+	err := cmd.Run()
+	if err != nil {
+		fmt.Println("Error running mvn command:", err)
+		return
+	}
+
+	dependencies := parseDependencies(out.String())
+	jsonString, err := json.MarshalIndent(dependencies, "", "  ")
+	if err != nil {
+		fmt.Println("Error marshaling JSON:", err)
+		return
+	}
+
+	fmt.Println(string(jsonString))
+}
+
+type NpmDependency struct {
+	Version      string                    `json:"version"`
+	Resolved     string                    `json:"resolved,omitempty"`
+	Dependencies map[string]*NpmDependency `json:"dependencies,omitempty"`
+}
+
+func checkNpm() {
+	cmd := exec.Command("npm", "ls", "--silent", "--json")
+	out, err := cmd.Output()
+	if err != nil {
+		fmt.Println("Error running npm command:", err)
+		return
+	}
+
+	var dependencies map[string]interface{}
+	if err := json.Unmarshal(out, &dependencies); err != nil {
+		fmt.Println("Error parsing JSON:", err)
+		return
+	}
+
+	jsonString, err := json.MarshalIndent(dependencies["dependencies"], "", "  ")
+	if err != nil {
+		fmt.Println("Error marshaling JSON:", err)
+		return
+	}
+
+	fmt.Println(string(jsonString))
+}
+
+func parseDependencies(output string) []Dependency {
+	lines := strings.Split(output, "\n")
+	var rootDependencies []Dependency
+	var stack []*Dependency
+
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		depth := strings.Count(line, "|") + strings.Count(line, "\\") + strings.Count(line, "+")
+		trimmed := strings.TrimSpace(line)
+		dep := parseDependencyLine(trimmed)
+
+		if depth == 0 {
+			rootDependencies = append(rootDependencies, dep)
+			stack = []*Dependency{&rootDependencies[len(rootDependencies)-1]}
+		} else {
+			for len(stack) > depth {
+				stack = stack[:len(stack)-1]
+			}
+			parent := stack[len(stack)-1]
+			parent.Children = append(parent.Children, dep)
+			stack = append(stack, &parent.Children[len(parent.Children)-1])
+		}
+	}
+
+	return rootDependencies
+}
+
+func parseDependencyLine(line string) Dependency {
+	parts := strings.Fields(line)
+	artifact := parts[0]
+	details := strings.Split(artifact, ":")
+	groupID := details[0]
+	artifactID := details[1]
+	version := details[2]
+	scope := ""
+	if len(details) > 3 {
+		scope = details[3]
+	}
+	return Dependency{
+		GroupID:    groupID,
+		ArtifactID: artifactID,
+		Version:    version,
+		Scope:      scope,
+	}
 }
